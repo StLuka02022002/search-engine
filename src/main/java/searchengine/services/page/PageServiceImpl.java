@@ -2,12 +2,16 @@ package searchengine.services.page;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import searchengine.config.context.ParserContext;
+import searchengine.config.context.StorageContext;
 import searchengine.entity.PageEntity;
 import searchengine.entity.SiteEntity;
 import searchengine.exception.IndexException;
 import searchengine.repository.PageRepository;
 import searchengine.services.AbstractService;
 import searchengine.services.indexing.page.IndexingPageService;
+import searchengine.services.indexing.parser.Parser;
+import searchengine.services.indexing.storage.Storage;
 import searchengine.services.site.SiteService;
 
 import java.net.MalformedURLException;
@@ -21,11 +25,14 @@ public class PageServiceImpl extends AbstractService<PageEntity, PageRepository>
 
     private final SiteService siteService;
     private final IndexingPageService indexingPageService;
+    private final ParserContext parserContext;
 
-    public PageServiceImpl(PageRepository repository, SiteService siteService, IndexingPageService indexingPageService) {
+    public PageServiceImpl(PageRepository repository, SiteService siteService,
+                           IndexingPageService indexingPageService, ParserContext parserContext) {
         super(repository);
         this.siteService = siteService;
         this.indexingPageService = indexingPageService;
+        this.parserContext = parserContext;
     }
 
     @Override
@@ -96,9 +103,23 @@ public class PageServiceImpl extends AbstractService<PageEntity, PageRepository>
             URL nuwUrl = new URL(url);
             String path = nuwUrl.getPath();
             SiteEntity site = getSiteByUrl(nuwUrl);
-
-            return repository.findBySiteIdAndPath(site.getId(), path)
-                    .orElseThrow(this::getException);
+            if (site != null) {
+                PageEntity page = repository.findBySiteIdAndPath(site.getId(), path)
+                        .orElse(null);
+                if (page == null) {
+                    Parser parser = parserContext.getParser(url);
+                    parser.parse();
+                    page = new PageEntity();
+                    page.setSite(site);
+                    page.setPath(nuwUrl.getPath());
+                    page.setCode(parser.getCode());
+                    page.setContent(parser.getContent());
+                    page = this.save(page);
+                }
+                return page;
+            }
+            log.error("Некорректный сайт: {}", url);
+            throw this.getException();
         } catch (MalformedURLException e) {
             log.error("Некорректный URL: {}", url, e);
             throw new IndexException("Некорректный URL: " + url);
